@@ -1,12 +1,13 @@
 """
 MCP client: connects to the server (stdio), discovers capabilities,
 and invokes tools/resources/prompts on behalf of the LLM.
-Supports --chat mode with Ollama (e.g. deepseek-r1:1.5b).
+Supports --chat mode with Ollama (e.g. qwen3:1.7b).
 """
 
 import argparse
 import asyncio
 import json
+import re
 import sys
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -24,6 +25,13 @@ def parse_tool_result(result) -> str:
     if isinstance(part, dict):
         return part.get("text", "")
     return str(part)
+
+
+def _strip_think(content: str) -> str:
+    """Remove <think>...</think> blocks from model output (e.g. qwen3 reasoning)."""
+    if not content:
+        return content
+    return re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
 
 
 async def list_capabilities(session: ClientSession) -> None:
@@ -57,18 +65,22 @@ async def mcp_tools_to_ollama(session: ClientSession) -> list[dict]:
     tools = []
     for t in response.tools:
         schema = getattr(t, "inputSchema", None) or {"type": "object", "properties": {}}
-        tools.append({
-            "type": "function",
-            "function": {
-                "name": t.name,
-                "description": (t.description or "No description").strip(),
-                "parameters": schema,
-            },
-        })
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": t.name,
+                    "description": (t.description or "No description").strip(),
+                    "parameters": schema,
+                },
+            }
+        )
     return tools
 
 
-def _ollama_chat_sync(model: str, messages: list[dict], tools: list[dict] | None) -> tuple:
+def _ollama_chat_sync(
+    model: str, messages: list[dict], tools: list[dict] | None
+) -> tuple:
     """Sync Ollama chat (run in thread to avoid blocking). Returns (response, tools_used)."""
     if tools:
         try:
@@ -90,7 +102,9 @@ def _message_to_dict(msg) -> dict:
                 "function": {
                     "index": i,
                     "name": tc.function.name,
-                    "arguments": tc.function.arguments if isinstance(tc.function.arguments, dict) else json.loads(tc.function.arguments or "{}"),
+                    "arguments": tc.function.arguments
+                    if isinstance(tc.function.arguments, dict)
+                    else json.loads(tc.function.arguments or "{}"),
                 },
             }
             for i, tc in enumerate(msg.tool_calls)
@@ -128,13 +142,15 @@ async def run_chat_loop(session: ClientSession, model: str) -> None:
             )
             if not tools_used and active_tools and not tools_disabled:
                 tools_disabled = True
-                print("Note: This model doesn't support tool calling; continuing without MCP tools.\n")
+                print(
+                    "Note: This model doesn't support tool calling; continuing without MCP tools.\n"
+                )
             msg = response.message
             messages.append(_message_to_dict(msg))
 
             if not getattr(msg, "tool_calls", None):
                 if msg.content:
-                    print(f"Assistant: {msg.content}")
+                    print(f"Assistant: {_strip_think(msg.content)}")
                 break
 
             # Execute each tool call via MCP
@@ -148,17 +164,23 @@ async def run_chat_loop(session: ClientSession, model: str) -> None:
                     text = parse_tool_result(result)
                 except Exception as e:
                     text = str(e)
-                messages.append({
-                    "role": "tool",
-                    "tool_name": name,
-                    "content": text,
-                })
-                print(f"  [tool: {name}] -> {text[:80]}{'...' if len(text) > 80 else ''}")
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_name": name,
+                        "content": text,
+                    }
+                )
+                print(
+                    f"  [tool: {name}] -> {text[:80]}{'...' if len(text) > 80 else ''}"
+                )
 
         print()
 
 
-async def main(server_path: str, chat: bool = False, model: str = "deepseek-r1:1.5b") -> None:
+async def main(
+    server_path: str, chat: bool = False, model: str = "qwen3:1.7b"
+) -> None:
     server_params = StdioServerParameters(
         command=sys.executable, args=[server_path], env=None
     )
@@ -232,9 +254,24 @@ async def main(server_path: str, chat: bool = False, model: str = "deepseek-r1:1
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="MCP client: connect to server, list capabilities, or chat with Ollama + MCP tools.")
-    parser.add_argument("server_path", nargs="?", default="mcp_server.py", help="Path to MCP server script (default: mcp_server.py)")
-    parser.add_argument("--chat", action="store_true", help="Start interactive chat with Ollama using MCP tools")
-    parser.add_argument("--model", default="deepseek-r1:1.5b", help="Ollama model for --chat (default: deepseek-r1:1.5b). For MCP tool use, pick a model that supports tools (e.g. qwen3, llama3.1).")
+    parser = argparse.ArgumentParser(
+        description="MCP client: connect to server, list capabilities, or chat with Ollama + MCP tools."
+    )
+    parser.add_argument(
+        "server_path",
+        nargs="?",
+        default="mcp_server.py",
+        help="Path to MCP server script (default: mcp_server.py)",
+    )
+    parser.add_argument(
+        "--chat",
+        action="store_true",
+        help="Start interactive chat with Ollama using MCP tools",
+    )
+    parser.add_argument(
+        "--model",
+        default="qwen3:1.7b",
+        help="Ollama model for --chat (default: qwen3:1.7b). For MCP tool use, pick a model that supports tools (e.g. qwen3:1.7b, llama3.1).",
+    )
     args = parser.parse_args()
     asyncio.run(main(args.server_path, chat=args.chat, model=args.model))

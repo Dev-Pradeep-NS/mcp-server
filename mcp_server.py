@@ -64,6 +64,13 @@ def read_document(doc_id: str = Field(description="Document id")):
 # -------------------------
 
 
+@mcp.tool(name="list_documents")
+async def list_documents(ctx: Context[ServerSession, None]):
+    """List all document names (files) in the document store (./docs)."""
+    names = os.listdir(DOC_DIR)
+    return {"documents": names, "count": len(names)}
+
+
 @mcp.tool(name="create_document")
 async def create_document(
     ctx: Context[ServerSession, None],
