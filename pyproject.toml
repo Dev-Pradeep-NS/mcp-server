@@ -1,7 +1,7 @@
 [project]
 name = "mcp-server"
 version = "0.1.0"
-description = "Add your description here"
+description = "MCP server and client for a notes app: create, read, edit, delete documents with Ollama chat and MCP tools."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

@@ -1,0 +1,13 @@
+{
+    "mcpServers": {
+        "notes": {
+            "command": "uv",
+            "args": [
+                "run",
+                "python",
+                "mcp_server.py"
+            ],
+            "env": {}
+        }
+    }
+}

@@ -7,28 +7,29 @@
 1. [Overview](#overview)
 2. [Installation](#installation)
 3. [Project Structure](#project-structure)
-4. [Server](#server)
-5. [Resources](#resources)
-6. [Tools](#tools)
-7. [Structured Output](#structured-output)
-8. [Prompts](#prompts)
-9. [Images](#images)
-10. [Context](#context)
-11. [Completions](#completions)
-12. [Elicitation](#elicitation)
-13. [Sampling](#sampling)
-14. [Logging and Notifications](#logging-and-notifications)
-15. [Authentication](#authentication)
-16. [Session](#session)
-17. [Request Context](#request-context)
-18. [Running the Server](#running-the-server)
-19. [HTTP Transport](#http-transport)
-20. [ASGI Integration](#asgi-integration)
-21. [SSE Servers](#sse-servers)
-22. [Writing MCP Clients](#writing-mcp-clients)
-23. [Parsing Tool Results](#parsing-tool-results)
-24. [MCP Primitives](#mcp-primitives)
-25. [Server Capabilities](#server-capabilities)
+4. [Using as a notes app](#using-as-a-notes-app)
+5. [Server](#server)
+6. [Resources](#resources)
+7. [Tools](#tools)
+8. [Structured Output](#structured-output)
+9. [Prompts](#prompts)
+10. [Images](#images)
+11. [Context](#context)
+12. [Completions](#completions)
+13. [Elicitation](#elicitation)
+14. [Sampling](#sampling)
+15. [Logging and Notifications](#logging-and-notifications)
+16. [Authentication](#authentication)
+17. [Session](#session)
+18. [Request Context](#request-context)
+19. [Running the Server](#running-the-server)
+20. [HTTP Transport](#http-transport)
+21. [ASGI Integration](#asgi-integration)
+22. [SSE Servers](#sse-servers)
+23. [Writing MCP Clients](#writing-mcp-clients)
+24. [Parsing Tool Results](#parsing-tool-results)
+25. [MCP Primitives](#mcp-primitives)
+26. [Server Capabilities](#server-capabilities)
 
 ---
 
@@ -77,6 +78,67 @@ project/
 
 - **mcp_server.py** – Your MCP server: registers tools, resources, and prompts.
 - **mcp_client.py** – Connects to the server (e.g. via stdio or HTTP) and invokes tools/resources on behalf of the LLM.
+
+---
+
+## Using as a notes app
+
+This project doubles as a **notes app**: the server stores notes as files in `./docs` (or the directory set by `DOCUMENTS_DIR`), and the client can list them or chat with an LLM that can create, read, edit, and delete notes via MCP tools.
+
+**Quick start:**
+
+```bash
+# List all notes (uses list_documents tool)
+uv run python mcp_client.py mcp_server.py --list-notes
+
+# Chat with the notes assistant (Ollama required; uses create_document, read_document, edit_document, etc.)
+uv run python mcp_client.py mcp_server.py --chat --model qwen3:1.7b
+```
+
+**Notes app features (all available in chat and via MCP tools):**
+
+| What you want | Tool | Example |
+|---------------|------|--------|
+| **Write a note** | `create_document(doc_name, content)` | "Save this: ..." / "Create a note called ideas.md" |
+| **See what notes I have** | `list_documents()` or client `--list-notes` | "What notes do I have?" / `python mcp_client.py mcp_server.py --list-notes` |
+| **Read a note** | `read_document(doc_id)` | "Read meeting-notes.md" / "Show me my todo list" |
+| **Update a note** | `update_document(doc_id, content)` | "Update shopping.txt with this: ..." / "Rewrite that note" |
+| **Small edit in a note** | `edit_document(doc_id, old_text, new_text)` | "Change 'buy milk' to 'buy oat milk' in shopping.txt" |
+| **Delete a note** | `delete_document(doc_id)` | "Delete old-notes.txt" (confirmation asked) |
+| **Summarize / review / improve a note** | `read_document(doc_id)` then assistant responds | "Summarize meeting-notes.md" / "Review draft.txt" / "Improve this note" |
+
+**Prompts (summarize_document, review_document, improve_document):**
+
+The server exposes three **prompts** (message templates) for clients that call `get_prompt()`:
+
+- **summarize_document**(doc_id) — template asking the LLM to summarize the document at `file://documents/{doc_id}`.
+- **review_document**(doc_id) — template asking for feedback on the document.
+- **improve_document**(doc_id) — template asking to improve clarity, grammar, and structure.
+
+In **chat mode**, the assistant does not call these prompts directly; it uses `read_document(doc_id)` to get the content and then replies with a summary, review, or improved version in the conversation. So you can say "Summarize meeting-notes.md", "Review draft.txt", or "Improve the wording of ideas.md" and the assistant will read the note and respond accordingly (and can offer to save an improved version with `update_document`).
+
+**Server behaviour:**
+
+- Notes are stored under `./docs` by default; set `DOCUMENTS_DIR` to use another folder. The directory is created automatically if it does not exist.
+- Document IDs (filenames) are validated: no `..`, path separators, or unsafe characters (only letters, digits, `-`, `_`, `.`).
+- Tools: `list_documents`, `read_document`, `create_document`, `edit_document`, `update_document`, `delete_document`. Prompts: `summarize_document`, `review_document`, `improve_document` (for clients that use `get_prompt`; in chat the assistant uses `read_document` + its reply).
+
+**Client behaviour:**
+
+- Without flags: connects and prints server capabilities (tools, resources, prompts).
+- `--list-notes`: calls `list_documents` and prints note names.
+- `--chat`: starts an interactive notes assistant with a system prompt that encourages creating and managing notes; the model uses MCP tools to read/write the document store.
+
+**Elicitation (user confirmation):**
+
+The server uses MCP **elicitation** in one place: **delete_document**. Before deleting a note, the server calls `ctx.elicit(message="Are you sure...?", schema=DeleteConfirm)`. That sends a request to the client: “the tool needs user confirmation.” The client is supposed to prompt the user (e.g. “Delete note 'x'? [y/N]”), then send back **accept** or **decline**. If the client sends accept, the server deletes the file; otherwise it returns `deleted: false`.
+
+- In **Cursor** (or other MCP hosts that support elicitation), the UI will show the confirmation and let you approve or cancel.
+- In the **CLI chat client** (`--chat`), behavior depends on the MCP Python SDK: if `call_tool` blocks on elicitation, the client may need to handle the elicitation response and prompt the user. If the SDK does not yet support elicitation in the tool-call flow, delete may complete without confirmation in this client.
+
+**Completions (autocomplete for document IDs):**
+
+The server implements **document completion**: `@mcp.completion()` with a handler that, given a **partial** string (e.g. `"meet"` or `"file://documents/meet"`), returns matching note names as completions (e.g. `file://documents/meeting-notes.md` with kind `"file"` and a description). So when a client (e.g. Cursor, or a custom UI with a “document” or “resource” field) supports MCP completions, it can call the completion endpoint as the user types and show autocomplete suggestions from the actual notes in `./docs`. The **CLI client** in this repo does not use completions; it’s mainly for chat and `--list-notes`.
 
 ---
 
