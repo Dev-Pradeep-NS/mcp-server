@@ -1,13 +1,22 @@
 {
-    "mcpServers": {
-        "notes": {
-            "command": "uv",
-            "args": [
-                "run",
-                "python",
-                "mcp_server.py"
-            ],
-            "env": {}
-        }
+  "mcpServers": {
+    "notes": {
+      "command": "uv",
+      "args": [
+        "run",
+        "python",
+        "notes/mcp_server.py"
+      ],
+      "env": {}
+    },
+    "git-server": {
+      "command": "uv",
+      "args": [
+        "run",
+        "python",
+        "git-mcp/server.py"
+      ],
+      "env": {}
     }
+  }
 }
